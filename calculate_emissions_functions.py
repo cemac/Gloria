@@ -95,9 +95,9 @@ def make_L_comp_new(S, U, sumS, sumUY, verbose, do_timing):
     I=np.identity(S.shape[0])
     if do_timing:
         time0=time.time()
-    #L=np.linalg.inv(I-np.matmul(scaledS,scaledU))
-    # use sci version - faster?
-    L = sla.inv(I-np.matmul(scaledS,scaledU))
+    L=np.linalg.inv(I-np.matmul(scaledS,scaledU))
+    # use sci version - faster? Test this on big data on machine with multiple cores
+    #L = sla.inv(I-np.matmul(scaledS,scaledU))
     if do_timing:
          time1=time.time()
          print('TIME: inverting matrix', time1-time0)
