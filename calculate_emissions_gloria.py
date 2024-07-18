@@ -14,17 +14,10 @@ from sys import argv
 import numpy as np
 import time
 from calculate_emissions_functions import *
-try:
-    from memory_profiler import profile
-except ImportError:
-    # use dummy profile
-    from profile import *
-    pass
 
 
 
 #-------------------------------------------------------------------------------------
-# This is where the code starts
 # This should be run as python calculate_emission_gloria <config> <start_year> <end_year> [-n -Le -v -t]
 # where config is a config file defining pathnames of files to read and output directory
 #       start_year and end_year define the years to read
@@ -159,11 +152,6 @@ def main():
         time_end=time.time()
         print('TIME: whole time', time_end-time00)
 
-    #my_profiler.disable()
-    # MRI write information to file in specified order
-    #stats = pstats.Stats( my_profiler ).sort_stats('tottime')
-    #stats.dump_stats('Profiling/gloria_smaller_ref.dat')
-    #stats.print_stats()
 
 if __name__ == '__main__':
     main()

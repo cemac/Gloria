@@ -9,6 +9,12 @@ import pandas as pd
 import numpy as np
 import time
 #import scipy.linalg as sla
+try:
+    from memory_profiler import profile
+except ImportError:
+    # use dummy profile
+    from profile import *
+    pass
 
 #----------------------------------------------------------------
 # read config file to get indir, outdir and filenames which are different
@@ -41,40 +47,45 @@ def read_config(cfname):
 #######################################################################################
 #----------------------------------------------------------------
 # this function will split the strings into a list of <country>+ (<code>), 
-# a list of <code> and a list of <some_str>, where <some_str> is the remainder of the string
+# and <some_str>, where <some_str> is the remainder of the string
 # inputs:
 #   labels is a list of strings containing <country> (<code>) <some_str>
+#       note that the string before the code may also contain ()
 #   valid_country_codes is a list of valid country codes
 # returns:
-#   country_full - list of <country>+(<code>)
+#   country - list of <country>
 #   country_code - list of <code>
 #   remainder - list of <some_str> 
 #------------------------------------------------------
 def split_country_and_code(labels, valid_country_codes):
 
     nl=len(labels)
-    country_full = ['NA']*nl
+    country = ['NA']*nl
     country_code=['']*nl
     remainder=['']*nl
     n=0
     for cs in labels:
         items=cs.split('(')
-        # items[0] is the country, items[1] should be <code>) <some_str> but if there are () in some_str this will also have been split
-        items2=items[1].split(')')
-        # items2[0] is <code>, items2[1] is remainder of the string
-        if items2[0] in valid_country_codes:
-            country_full[n]=items[0]+'('+items2[0]+')'
-            country_code[n]=items2[0]
-            remainder[n]=cs.replace(country_full[n], '')
+        # find which part has the country code
+        for item in items:
+            items2=item.split(')')
+            if items2[0] in valid_country_codes:
+                country_code[n]=items2[0]
+                # country is the string before the country code and remainder is the part after
+                items3=cs.split('('+items2[0]+')')
+                country[n]=items3[0]
+                remainder[n]=items3[1]
+        if country[n]=='NA':
+            print('Could not find country code in', cs)
         n+=1
 
 
     # end code if there is a mismatch in labels, this is done to test that the code does what it should
-    if 'NA' in country_full:
+    if 'NA' in country:
         print('Error: Missing country labels')
         raise SystemExit 
         
-    return country_full, country_code, remainder
+    return country, country_code, remainder
 
 
 #----------------------------------------------------------------
@@ -83,13 +94,13 @@ def split_country_and_code(labels, valid_country_codes):
 # labels_fname is the filename for the labels file
 # lookup_fname is the filename for the lookup file
 #----------------------------------------------------------------
+@profile
 def get_metadata_indices(mrio_filepath, labels_fname, lookup_fname):
     # read metadata which is used for column and row labels later on
     readme = mrio_filepath + labels_fname
     labels = pd.read_excel(readme, sheet_name=None)
 
     # get lookup to fix labels
-    # MRI modify for "small dataset"
     lookup = pd.read_excel(mrio_filepath + lookup_fname, sheet_name=None)
     # get list of countries in dataset
     lookup['countries'] = lookup['countries'][['gloria', 'gloria_code']].drop_duplicates().dropna()
@@ -104,9 +115,9 @@ def get_metadata_indices(mrio_filepath, labels_fname, lookup_fname):
     # remove special characters frm country names -JAC this seems to be only removing sector
     # JAC replace loop with call to function
     valid_country_codes=lookup['countries']['gloria_code'].tolist()
-    country_full, country_code, remainder=split_country_and_code(t_cats['label'], valid_country_codes)        
-    t_cats['country_full'] = country_full
-    t_cats['country'] = country_code
+    country, country_code, remainder=split_country_and_code(t_cats['label'], valid_country_codes)        
+    #t_cats['country'] = country # dont really need this as not used
+    t_cats['country_code'] = country_code
     t_cats['sector'] = remainder
 
     # fix final demand labels (this is in the Y dataframe later)
@@ -114,12 +125,12 @@ def get_metadata_indices(mrio_filepath, labels_fname, lookup_fname):
     fd_cats = pd.DataFrame(labels['Sequential region-sector labels']['Sequential_finalDemand_labels'].dropna(how='all', axis=0)); fd_cats.columns = ['label']
     # remove special characters frm country names
     # JAC replace loop below with call to function
-    country_full, country_code, remainder=split_country_and_code(fd_cats['label'], valid_country_codes)        
-    fd_cats['country_full'] = country_full
-    fd_cats['country'] = country_code
+    country, country_code, remainder=split_country_and_code(fd_cats['label'], valid_country_codes)        
+    #fd_cats['country'] = country # dont really need this as not used
+    fd_cats['country_code'] = country_code
     fd_cats['fd'] = remainder
 
-    # split lables by ndustries vs products (these later get split into the S and U dataframes)
+    # split lables by industries vs products (these later get split into the S and U dataframes)
     t_cats['ind'] = t_cats['label'].str[-8:]
     industries = t_cats.loc[t_cats['ind'] == 'industry']
     products = t_cats.loc[t_cats['ind'] == ' product']
@@ -128,10 +139,10 @@ def get_metadata_indices(mrio_filepath, labels_fname, lookup_fname):
     pix=np.where(sector_type==' product')[0]
 
     # make index labels
-    z_idx = pd.MultiIndex.from_arrays([t_cats['country'], t_cats['sector']]) # labels for Z dataframe
-    industry_idx = pd.MultiIndex.from_arrays([industries['country'], industries['sector']]) # labels used to split Z into S and U
-    product_idx = pd.MultiIndex.from_arrays([products['country'], products['sector']]) # labels used to split Z into S and U
-    y_cols = pd.MultiIndex.from_arrays([fd_cats['country'], fd_cats['fd']]) # labels for Y dataframe
+    z_idx = pd.MultiIndex.from_arrays([t_cats['country_code'], t_cats['sector']]) # labels for Z dataframe
+    industry_idx = pd.MultiIndex.from_arrays([industries['country_code'], industries['sector']]) # labels used to split Z into S and U
+    product_idx = pd.MultiIndex.from_arrays([products['country_code'], products['sector']]) # labels used to split Z into S and U
+    y_cols = pd.MultiIndex.from_arrays([fd_cats['country_code'], fd_cats['fd']]) # labels for Y dataframe
 
     sat_rows = labels['Satellites']['Sat_indicator'] # labels for CO2 dataframe
     # clear space in variable explorer to free up memory
@@ -156,7 +167,7 @@ def get_metadata_indices(mrio_filepath, labels_fname, lookup_fname):
 ## without constructing big matrices again
 ###########################################################################################
 
-#@profile
+@profile
 #--------------------------------------------------------------------
 # function read_data_new
 # This reads only the relevant rows and columns from Z, Y and co2file
@@ -197,7 +208,7 @@ def read_data_new(z_filepath, y_filepath, co2_filepath, iix, pix, industry_idx, 
 
     return S, U, Y, stressor
 
-#@profile
+@profile
 #--------------------------------------------------------------------
 # function read_data_old
 # This reads the relevant rows and columns from Z, Y and co2file by reading
@@ -250,7 +261,7 @@ def read_data_old(z_filepath,y_filepath,co2_filepath,z_idx,industry_idx, product
 ## Gloria Emissions calculations
 ## The following functiosn are for calcluating the footprint
 ###########################################################################################
-#@profile
+@profile
 def make_x(Z, Y, verbose):
     
     x = np.sum(Z, 1)+np.sum(Y, 1)
@@ -259,7 +270,7 @@ def make_x(Z, Y, verbose):
         print("DBG: X shape is ", x.shape)
     return x
 
-#@profile
+@profile
 # equivalent function of make_x but does it as components
 def make_x_comp_new(S, U, Y, verbose):
     # components of what was x
@@ -275,7 +286,7 @@ def make_x_comp_new(S, U, Y, verbose):
 
     return sumS, sumUY
 
-#@profile
+@profile
 def make_L(Z, x, verbose, do_timing):
     
     bigX = np.zeros(shape = (len(Z)))    
@@ -301,7 +312,7 @@ def make_L(Z, x, verbose, do_timing):
 
     return L, I_minus_A
 
-#@profile
+@profile
 # equivalent of make_L but does it as components
 def make_L_comp_new(S, U, sumS, sumUY, verbose, do_timing):
 
@@ -347,7 +358,7 @@ def make_e(stressor, x):
     e[0, 0:np.size(stressor)] = np.transpose(stressor)
     e = e/x
 
-#@profile
+@profile
 def make_Z_from_S_U(S, U, verbose):
     # MRI this makes Z a numpy array and fills with zeroes
     Z = np.zeros(shape = (np.size(S, 0)+np.size(U, 0), np.size(S, 1)+np.size(U, 1)))
@@ -359,7 +370,7 @@ def make_Z_from_S_U(S, U, verbose):
 
     return Z
 
-#@profile
+@profile
 def indirect_footprint_SUT(S, U, Y, stressor, use_Le, verbose, do_timing):
     # make column names
     s_cols = S.columns.tolist()
@@ -435,7 +446,7 @@ def indirect_footprint_SUT(S, U, Y, stressor, use_Le, verbose, do_timing):
  
     return footprint
 
-#@profile
+@profile
 def indirect_footprint_SUT_new(S, U, Y, stressor,verbose, do_timing):
     # calculate emissions
     sumS, sumUY=make_x_comp_new(S,U,Y,verbose)
