@@ -3,18 +3,31 @@
 Created on Mon Sep 25 14:31:51 2023
 
 @author: geolki
+
+updated by Julia Crook (CEMAC) to optimize the code by only reading what is necessary from csv files
+and by computing footprint using the components rather than a big matrix
+I have added read_config to get the required parameters to run either on Large data or Small data. 
+Also it makes the code more configurable in where the files are stored.
+
 """
 
 import pandas as pd
 import numpy as np
-import time
 #import scipy.linalg as sla
-try:
+
+
+#-----------------------------------------
+# to handle memory profiling line by line
+#-----------------------------------------
+import os
+
+mprof=os.environ['MPROFILE_Lbl']
+print('MPROFILE_Lbl', mprof)
+if mprof==1 or mprof=='1':
+    print('cef: importing mprofiler')
     from memory_profiler import profile
-except ImportError:
-    # use dummy profile
+else:
     from profile import *
-    pass
 
 #----------------------------------------------------------------
 # read config file to get indir, outdir and filenames which are different
@@ -167,7 +180,6 @@ def get_metadata_indices(mrio_filepath, labels_fname, lookup_fname):
 ## without constructing big matrices again
 ###########################################################################################
 
-@profile
 #--------------------------------------------------------------------
 # function read_data_new
 # This reads only the relevant rows and columns from Z, Y and co2file
@@ -188,6 +200,7 @@ def get_metadata_indices(mrio_filepath, labels_fname, lookup_fname):
 #     Y - the product_idx rows of Y
 #     stressor - the [stressor_row, industry_idx] part of co2_filepath (NB this is a single row)
 #--------------------------------------------------------------------
+@profile
 def read_data_new(z_filepath, y_filepath, co2_filepath, iix, pix, industry_idx, product_idx, y_cols, stressor_row):
 
     # read S and U directly from Z by specifying specific rows and cols
@@ -208,7 +221,6 @@ def read_data_new(z_filepath, y_filepath, co2_filepath, iix, pix, industry_idx, 
 
     return S, U, Y, stressor
 
-@profile
 #--------------------------------------------------------------------
 # function read_data_old
 # This reads the relevant rows and columns from Z, Y and co2file by reading
@@ -230,6 +242,7 @@ def read_data_new(z_filepath, y_filepath, co2_filepath, iix, pix, industry_idx, 
 #     Y - the product_idx rows of Y
 #     stressor - the [stressor_row, industry_idx] part of co2_filepath (NB this is a single row)
 #--------------------------------------------------------------------
+@profile
 def read_data_old(z_filepath,y_filepath,co2_filepath,z_idx,industry_idx, product_idx, y_cols, sat_rows, stressor_cat):
 
     # import Z file to make S and U tables
@@ -259,7 +272,7 @@ def read_data_old(z_filepath,y_filepath,co2_filepath,z_idx,industry_idx, product
 
 ###########################################################################################
 ## Gloria Emissions calculations
-## The following functiosn are for calcluating the footprint
+## The following functions are for calcluating the footprint
 ###########################################################################################
 @profile
 def make_x(Z, Y, verbose):
@@ -270,87 +283,90 @@ def make_x(Z, Y, verbose):
         print("DBG: X shape is ", x.shape)
     return x
 
-@profile
 # equivalent function of make_x but does it as components
+@profile
 def make_x_comp_new(S, U, Y, verbose):
     # components of what was x
-    sumS=np.sum(S,1)
-    sumS[sumS == 0] = 0.000000001 # this is x1
+    sumS=np.sum(S,1)  # this is x1
+    sumS[sumS == 0] = 0.000000001 # do this so dividing by 0 does not happen
     sumU=np.sum(U,1) 
     sumY=np.sum(Y,1)
-    sumUY=sumU+sumY
-    sumUY[sumUY==0] = 0.000000001 # this is x2
+    sumUY=sumU+sumY   # this is x2
+    sumUY[sumUY==0] = 0.000000001 # do this so dividing by 0 does not happen
 
     if verbose:
-        print("DBG: sumS, sumUY shape is ", sumS.shape, sumUY.shape)
+        print('DBG: sumS, sumUY shape is ', sumS.shape, sumUY.shape)
 
     return sumS, sumUY
 
 @profile
-def make_L(Z, x, verbose, do_timing):
+def make_L(Z, x, verbose):
     
     bigX = np.zeros(shape = (len(Z)))    
-    # bigX is as big as Z yet another wasteful storage (delete it? or chose other method)
     bigX = np.tile(np.transpose(x), (len(Z), 1))
-    # MRI A is doubling the storage requirement (Z) and then L also adds same again
+
     A = np.divide(Z, bigX)
     #np.save('A_old.npy', A)    
     I_minus_A=np.identity(len(Z))-A
-    if do_timing:
-        time0=time.time()
     L = np.linalg.inv(I_minus_A)
-    #L = sla.inv(np.identity(len(Z))-A) Marks new bit
-    if do_timing:
-        time1=time.time()
-        print('TIME: inverting I-A matrix', time1-time0)
-
     #np.save('L_old.npy', L)
     if verbose:
-        print("DBG: bigX shape is ", bigX.shape)
-        print("DBG: A shape is ", A.shape)
-        print("DBG: L shape is ", L.shape)
+        print('DBG: bigX shape is ', bigX.shape)
+        print('DBG: A shape is ', A.shape)
+        print('DBG: L shape is ', L.shape)
 
-    return L, I_minus_A
+    return L
 
-@profile
 # equivalent of make_L but does it as components
-def make_L_comp_new(S, U, sumS, sumUY, verbose, do_timing):
+@profile
+def make_L_comp_new(S, U, sumS, sumUY, verbose):
 
     bigSumS = np.tile(np.transpose(sumS), (S.shape[0],1))
     bigSumUY = np.tile(np.transpose(sumUY), (U.shape[0],1))
 
     # use elementwise divide as was done in make_L to get A
-    scaledS=np.divide(S,bigSumUY)
-    scaledU=np.divide(U,bigSumS)
-    #np.save('scaledS.npy', scaledS)
-    #np.save('scaledU.npy', scaledU)
+    Snorm=np.divide(S,bigSumUY)
+    Unorm=np.divide(U,bigSumS)
+    #np.save('Snorm.npy', Snorm)
+    #np.save('Unorm.npy', Unorm)
 
-    # in equation [I-A]X=D where I-A top is  [I,-scaledS] and I-A bottom is [-scaledU, I], Dtop is e1 and Dbottom=0
-    # assume X is [X1,X2] from which we get
-    # 1. X1-scaledS.X2 = e1 and
-    # 2. -scaledU.X1 + X2 = 0
+    # in equation [I-A]X=D where I-A top is  [I,-Snorm] and I-A bottom is [-Unorm, I], Dtop is 0 and Dbottom is Y
+    # assume X has X1 as the top part and X2 as the bottom part from which we get
+    # 1. X1-Snorm.X2 = 0 and
+    # 2. -Unorm.X1 + X2 = Y
     #   
-    # from 2. we get 3. X2=scaledU.X1
-    # insert into 1. X1 - scaledS.(scaledU.X1) = e1
-    # (I-scaledS.scaledU).X1 = e1
-    # so X1 = inv(I-scaledS.scaledU).e1
-    # then use X2=scaledU.X1
+    # from 1. we get 3. X1=Snorm.X2
+    # insert into 2. X2 - Unorm.(Snorm.X2) = Y
+    # so (I-Unorm.Snorm).X2 = Y
+    # so X2 = inv(I-Unorm.Snorm).Y
+    # If we say L has components [Ltl, Ltr]
+    #                            [Lbl, Lbr]
+    # then Ltl.0+Ltr.Y=X1, i.e. Ltr.Y=X1=Snorm.X2=Snorm.inv(I-Unorm.Snorm).Y
+    # so Ltr=Snorm.inv(I-Unorm.Snorm)
+    # and Lbl.0+Lbr.Y=X2=inv(I-Unorm.Snorm).Y
+    # so Lbr=inv(I-Unorm.Snorm)
+    # we cannot say anything about Ltl and Lbl from these equations
+    # we will be using L to do e.L where the bottom part of e is 0. This means we will need Ltl and Ltr
+    # We also know that [Ltl, Ltr] [I, -Snorm] = [I, 0]
+    #                   [Lbl, Lbr] [-Unorm, I]   [0, I]
+    # so Ltl-Ltr.Unorm=I, ie Ltl =I+Ltr.Unorm
+    # and Lbl-Lbr.Unorm=0  ie Lbl=Lbr.Unorm
 
     I=np.identity(S.shape[0])
-    if do_timing:
-        time0=time.time()
-    L=np.linalg.inv(I-np.matmul(scaledS,scaledU))
+    L=np.linalg.inv(I-np.matmul(Unorm,Snorm))
     # use sci version - faster? Test this on big data on machine with multiple cores
-    #L = sla.inv(I-np.matmul(scaledS,scaledU))
-    if do_timing:
-         time1=time.time()
-         print('TIME: inverting matrix', time1-time0)
+    #L = sla.inv(I-np.matmul(Unorm, Snorm))
     #np.save('L_new.npy', L)
     if verbose:
-        print('scaledU and U shape', scaledU.shape, scaledS.shape)
-        print("DBG: L shape is ", L.shape)
+        print('DBG: Unorm and Snorm shape', Unorm.shape, Snorm.shape)
+        print('DBG: L shape is ', L.shape)
+    
+    # As we are going to do e.L where the second half of e is 0 we only need the Ltl and Ltr components
+    # but then we are going to multiply by Y where Y is 0 in top half so we only need Ltr
+    Ltr=np.dot(Snorm, L)
+    #Ltl=I+np.dot(Ltr, Unorm)
 
-    return L, scaledU, scaledS
+    return Ltr
 
 def make_e(stressor, x):
     # MRI not used in this model for some reason
@@ -360,18 +376,33 @@ def make_e(stressor, x):
 
 @profile
 def make_Z_from_S_U(S, U, verbose):
-    # MRI this makes Z a numpy array and fills with zeroes
     Z = np.zeros(shape = (np.size(S, 0)+np.size(U, 0), np.size(S, 1)+np.size(U, 1)))
     
     Z[np.size(S, 0):, 0:np.size(U, 1)] = U
     Z[0:np.size(S, 0), np.size(U, 1):] = S
     if verbose:
-        print("DBG: make Z from S and U", Z.size, Z.shape )
+        print('DBG: make Z from S and U', Z.size, Z.shape )
 
     return Z
 
+# there is no equivalent of make_Z_from_S_U for the new way as we just work with S and U
+
+# I have pulled out the for loop that creates the footprint so I can time it
 @profile
-def indirect_footprint_SUT(S, U, Y, stressor, use_Le, verbose, do_timing):
+def calculate_footprint(bigY, eL, y_cols, su_idx, u_cols):
+
+    footprint = np.zeros(shape = bigY.shape).T
+
+    for a in range(np.size(bigY, 1)):
+        footprint[a] = np.dot(eL, np.diag(bigY[:, a]))
+    
+    old_shape=footprint.shape
+    footprint = pd.DataFrame(footprint, index=y_cols, columns=su_idx)
+    footprint = footprint[u_cols]
+    return footprint
+
+@profile
+def indirect_footprint_SUT(S, U, Y, stressor, verbose):
     # make column names
     s_cols = S.columns.tolist()
     u_cols = U.columns.tolist()
@@ -380,74 +411,51 @@ def indirect_footprint_SUT(S, U, Y, stressor, use_Le, verbose, do_timing):
     y_cols = Y.columns
 
     # calculate emissions
-    if do_timing:
-        time0=time.time()
     Z = make_Z_from_S_U(S, U,verbose)
-    if do_timing:
-        time1=time.time()
-        print('TIME: make_Z_from_S_U', time1-time0)
     # clear memory
     del S, U
     
     bigY = np.zeros(shape = [np.size(Y, 0)*2, np.size(Y, 1)])
-    
-    footprint = np.zeros(shape = bigY.shape).T
-    footprint_Le = np.zeros(shape = bigY.shape).T
-
     bigY[np.size(Y, 0):np.size(Y, 0)*2, 0:] = Y 
-    x = make_x(Z, bigY,verbose)
-    if do_timing:
-        time0=time.time()
-    L,I_minus_A = make_L(Z, x, verbose, do_timing)
-    if do_timing:
-        time1=time.time()
-        print('TIME: make_L', time1-time0)
 
-    #np.save('L_old.npy', L)
+    x = make_x(Z, bigY,verbose)
+    L = make_L(Z, x, verbose)
+
     bigstressor = np.zeros(shape = [np.size(Y, 0)*2, 1])
     bigstressor[:np.size(Y, 0), 0] = np.array(stressor)
     e = np.sum(bigstressor, 1)/x
     #np.save('e_old.npy', e)
 
-    if use_Le:
-        Le=np.dot(L,e)
-        #np.save('Le_old.npy', Le)
-        dot_prod=Le
-        dot_prod_str='Le'
-    else:
-        eL = np.dot(e, L)
-        #np.save('eL_old.npy', eL)
-        dot_prod=eL
-        dot_prod_str='eL'
+    eL = np.dot(e, L)
+    #np.save('eL_old.npy', eL)
 
     if verbose:
         print('DBG: bigY shape', bigY.shape)
-        print("DBG: e shape is ", e.shape, "big_stressor is ", bigstressor.shape)
-        print("DBG: "+dot_prod_str+" shape is ", dot_prod.shape)
-        # check it works the other way
-        exp_e=np.dot(I_minus_A,dot_prod)
-        diff=abs(exp_e-e)
-        ix=np.where(diff>0.00001)
-        print(len(ix[0]), 'diffs exp_e and e using', dot_prod_str)
+        print('DBG: e shape is ', e.shape, 'big_stressor is ', bigstressor.shape)
+        print('DBG: eL shape is ', eL.shape)
 
-    if do_timing:
-        time0=time.time()
-    for a in range(np.size(Y, 1)):
-        footprint[a] = np.dot(dot_prod, np.diag(bigY[:, a]))
-    
-    old_shape=footprint.shape
-    footprint = pd.DataFrame(footprint, index=y_cols, columns=su_idx)
-    footprint = footprint[u_cols]
-    if do_timing:
-         time1=time.time()
-         print('TIME: make footprint', time1-time0)
+    footprint = calculate_footprint(bigY, eL, y_cols, su_idx, u_cols)
     if verbose:
-         print('DBG: full,u_cols footprint shape is',old_shape, footprint.shape)
+         print('DBG: footprint shape is', footprint.shape)
  
     return footprint
 
+# I have pulled out the calculation of the footprint so I can time it
 @profile
-def indirect_footprint_SUT_new(S, U, Y, stressor,verbose, do_timing):
+def calculate_footprint_new(eL2,Y,y_cols,u_cols):
+
+    # for each column in Y the code used to take the diagonal of bigY to find the dot product with eL
+    # as bigY was 0 in the top half, only the bottom half of eL would have been valid
+    # therefore we only need to use the eL2 part.
+    
+    Y2=Y.to_numpy()
+    footprint=np.asarray([eL2*Y2[:,a] for a in range(Y.shape[1])])
+    footprint = pd.DataFrame(footprint, index=y_cols, columns=u_cols)
+    return footprint
+
+# equivalent of indirect_footprint_SUT but does it as components
+@profile
+def indirect_footprint_SUT_new(S, U, Y, stressor,verbose):
     # calculate emissions
     sumS, sumUY=make_x_comp_new(S,U,Y,verbose)
 
@@ -459,48 +467,16 @@ def indirect_footprint_SUT_new(S, U, Y, stressor,verbose, do_timing):
         print('DBG: e1 shape', e1.shape)
     #np.save('e1_new.npy', e1)
 
-    if do_timing:
-        time0=time.time()
-    L, scaledU, scaledS = make_L_comp_new(S, U, sumS, sumUY, verbose, do_timing)
-    if do_timing:
-        time1=time.time()
-        print('TIME: make_L_comp_new', time1-time0)
-
-    # It should be L dot e not e dot L - in fact I have shown it does not work in reverse if you use e dot L
-    X1=np.dot(L,e1)
-    X2=np.dot(scaledU, X1)
-    Le=np.zeros(len(X1)*2)
-    Le[:len(X1)]=X1
-    Le[len(X1):]=X2
+    Ltr = make_L_comp_new(S, U, sumS, sumUY, verbose)
+    #eL1=np.dot(e1,Ltl)
+    eL2=np.dot(e1,Ltr)
     if verbose:
-        # check it works the other way
-        exp_e1=X1-np.dot(scaledS, X2)
-        exp_e2=X2-np.dot(scaledU,X1)
-        diff=exp_e1-e1
-        ix=np.where(abs(diff)>0.000001)
-        if len(ix[0])>0:
-            print('L.e calc not reversible!')
-
-        print('DBG: X1, X2 and Le shape', X1.shape, X2.shape, Le.shape)
-    #np.save('Le_new.npy', Le)
+        print('DBG: Ltr shape', Ltr.shape)
+    #np.save('eL2_new.npy', eL2)
     
-    # then for each column in Y the code used to take the diagonal of bigY to find the dot product with eL
-    # as bigY was 0 in the top half only the bottom half of eL would have been valid
-    # therefore we only need to use the X2 part
-    
-    footprint = np.zeros(shape = Y.shape).T
-    Y2=Y.to_numpy()
-    if do_timing:
-        time0=time.time()
-    for a in range(np.size(Y2, 1)):
-        footprint[a] = np.dot(X2, np.diag(Y2[:, a]))
-
     y_cols = Y.columns
     u_cols=U.columns
-    footprint = pd.DataFrame(footprint, index=y_cols, columns=u_cols)
-    if do_timing:
-         time1=time.time()
-         print('TIME: make footprint', time1-time0)
+    footprint=calculate_footprint_new(eL2,Y,y_cols,u_cols)
     if verbose:
         print('DBG: footprint shape is',footprint.shape)
 
