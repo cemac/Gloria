@@ -10,7 +10,15 @@ where -n means run in the new way of processing, -v means verbose
 
 The gloria environment needs openpyxl, pandas, matplotlib, numpy and scipy. If memory profiling is required also install memory_profiler
 
-If memory_profiler is not available profile.py takes its place and does nothing
-To do line by line memory profiling the MPROFILE_Lbl environment variable must be set to 1, otherwise set toit to 0. In linux use export MPROFILE_Lbl=1, in Anaconda powershell use conda env config vars set MPROFILE_Lbl=1 and reactivate the conda environment.
+If memory_profiler is not available profile.py takes its place and does nothing.
+To do line by line memory profiling the MPROFILE_Lbl environment variable must be set to 1, otherwise set it to 0. In linux use:
+
+export MPROFILE_Lbl=1
+
+In Anaconda powershell use:
+
+conda env config vars set MPROFILE_Lbl=1
+
+then reactivate the conda environment.
 
 To do cProfile timing the @profile decoration in calculate_emissions_functions.py needs to be removed as does the memory profiling import statements.
