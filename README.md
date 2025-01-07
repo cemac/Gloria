@@ -22,3 +22,7 @@ conda env config vars set MPROFILE_Lbl=1
 then reactivate the conda environment.
 
 To do cProfile timing the @profile decoration in calculate_emissions_functions.py needs to be removed as does the memory profiling import statements.
+
+The code was originally written by Lena Kilian (SRI) and modified to improve timing and memory use by Julia Crook (CEMAC)
+
+
